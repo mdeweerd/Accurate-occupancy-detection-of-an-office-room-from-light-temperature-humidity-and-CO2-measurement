@@ -1,0 +1,1175 @@
+---
+title: "STA5076X - Supervised Learning Assignment 2"
+author: \textcolor{blue}{ALEX MIRUGWE - MRGALE005}
+date: '`r format(Sys.Date(), "%d-%B-%Y")`'
+output: 
+  pdf_document: 
+    fig_caption: yes
+    number_sections: yes
+bibliography: cite.bib
+linkcolor: black
+fontsize: 12pt
+header-includes:
+  - \usepackage{titling}
+  - \pretitle{\begin{center}
+  - \posttitle{\end{center}}
+    \includegraphics[width=2in,height=2in]{G:/UCT-MSc. Data Science/Semester 1/Supervised Learning/Assignment/Assignment 2/logo.jpg}\LARGE\\}
+---
+
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(tinytex.verbose = TRUE)
+
+```
+
+\pagebreak
+
+\pagebreak
+\tableofcontents
+\pagebreak
+
+\newpage
+
+\listoffigures
+\listoftables
+\newpage
+
+
+# Abstract
+
+This assignment aims at developing, validating, and testing several classification statistical models that could predict whether or not an office room is occupied using several data features, namely temperature (◦C), light (lx), humidity (%), CO$_2$ (ppm), and a humidity ratio. The data is modeled using classification techniques i.e. Logistic regression, Classification tree, Bagging-Random forest, and Gradient boosted trees.
+
+These models were trained and then after evaluated against validation and test sets and using confusion matrices to obtain classification and misclassification rates. The logistic model was trained using *glmnet* R package, *Tree* package for classification tree model, *randomForest* for both Bagging and Random Forest Models, and *gbm* package for Gradient Boosted Model.
+
+The best accuracy was obtained from the Random Forest Model with a classification rate of 93.21% when it was evaluated against the test set. Light sensor is also the most significant variable in predicting whether the office room is occupied or not, this was observed in all the five models.
+
+
+```{r  echo=FALSE,cache=FALSE, results=FALSE, warning=FALSE, include=FALSE, warning=FALSE}
+#Loading neccessary libraries
+library(rlang)
+library(glmnet)  #logistic regression library
+library(tree)    #classification tree library
+library(randomForest)  #Bagging and Random forest library
+library(gbm)  #Boosting library
+library(ggplot2) #plots
+library(corrplot) #correlation plots
+library(ROCR) #model evaluation
+library(knitr) #tables
+library(sjPlot) #plotting results of logistic regresssion
+library(sjmisc) #plotting results of logistic regression
+library(effects) #probability output and plots
+library(glmnet) #regularization package
+library(lubridate) #dates library
+library(Rcpp)
+library(tidyverse)
+library(caret) #classification and regression package
+library(grid)
+```
+
+\newpage
+# Introduction
+## Dataset Description
+
+The models are trained and evaluated on a dataset of 6751 observations and 7 variables. These variables are date, Temperature, Humidity, Light, CO2, HummidityRatio, and Occupancy. And of these variables, five(5) variables (Temperature, Humidity, Light, CO2, and HummidityRatio) are integers, Date is a date-time type, and Occupancy is of factor datatype.
+
+```{r  echo=FALSE, warning=FALSE, include=FALSE}
+#Train and validation set
+train_set <- read.csv("G:/UCT-MSc. Data Science/Semester 1/Supervised Learning/Assignment/Assignment 2/occupancy_training.csv",header = TRUE,stringsAsFactors = TRUE)
+
+#Summary of the dataset
+summary(train_set)
+
+#changing Occupancy variable datatype to factor
+train_set$Occupancy <- as.factor(train_set$Occupancy)
+
+
+#changing date variable to posixct format 
+train_set$date <- ymd_hms(train_set$date)
+
+#Viewing the top observations of the training set
+head(train_set)
+
+
+#dimesions od the training  and testing datasets
+dim(train_set)
+
+
+#dataypes of the dataset
+sapply(train_set,class)
+
+```
+
+## Summary statistics 
+```{r  echo=FALSE, warning=FALSE, include=FALSE}
+#factor variables' level distribution
+(round(prop.table(table(train_set$Occupancy))*100,2))
+
+```
+
+|       |Temperature |Humidity |Light |CO2   |HumidityRatio|
+|-------|------------|---------|------|------|-------------|
+|Min.   |19.00       |16.75    |0.0   |412.8 |0.002674     |
+|Median |20.39       |26.10    |0.0   |452.7 |0.003716     |
+|Mean   |20.56       |25.06    |139.6 |631.8 |0.003748     |
+|Max.   |23.10       |39.12    |1546.3|2028.5|0.006476     |
+
+Table: Summary statistics of the data 
+
+At first glance, Table 1 shows the summary distribution of the numerical data variables in the training dataset. The average Temperature is 20.56$^0$C, average Humidity is 25.06%, average Light is 139.6lx, average of CO$_2$ is 631.8ppm. The average of HumidityRatio is 0.003748. The table also shows the minimum and maximum values of different variables. For humidity, since the median is greater than the mean, then the variable data is left-skewed and this is confirmed by *figure 1*. It's observed also, that the mean value of light is much greater than the median and we can suspect that during some day hours, recorded light values were extremely high.
+
+|0           |1           |
+|------------|------------|
+|5092(75.43%)|1659(24.57%)|
+
+Table: Out of the 6751 recorded times of the Occupancy variables, 5092 (or 75.43%) times the room was not occupied and 1659 times it was occupied as shown in the tables below.
+
+```{r  echo=FALSE, warning=FALSE, fig.height = 3,fig.width = 3, fig.cap= "The Histogram continues to explain data shown by table 2: 1 - Office occupied and 0 - Not occupied"}
+plot(train_set$Occupancy, col = "Blue", xlab = "Room Occupation Status",
+     ylab = "Recorded Times", main = "Histogram showing the room \n occupation status")
+
+```
+
+
+```{r  echo=FALSE, warning=FALSE, fig.height = 4,fig.width = 4, fig.cap= "Histogram represtation of different variables in the dataset"}
+# histograms each attribute
+par(mfrow=c(2,3))
+for(i in 2:6) {
+hist(train_set[,i], main=names(train_set)[i],xlab = names(train_set)[i],col = "blue",
+     legend.text = unique(train_set$Occupancy))
+}
+```
+
+The above figures show that all variables are right-skewed which seems to indicate that there are several data points in those variables, perhaps outliers, that are greater than the median or mode.
+
+
+```{r  echo=FALSE, warning=FALSE, include=FALSE}
+#spliting the date variable
+traset <- tidyr::separate(train_set, date, c("Year","Month","Date","Hour","Minutes","Second"))
+traset <- tidyr::unite(traset,"Date",Year,Month,Date,sep = "-")
+
+#creating a single variabel time and grouping similar times
+traset <- traset%>%
+  mutate(Minutes = "00")%>%
+  unite("Time",Hour,Minutes,sep = ":") %>%
+  group_by(Time)
+
+#Averaging Temperature values depaending on grouped similar hours
+temp <- traset %>%
+  summarise(Temp_Ave = mean(Temperature,na.rm = T))
+
+#Averaging Humidity values depaending on grouped similar hours
+Humid <- traset %>%
+  summarise(Humidity_Ave = mean(Humidity,na.rm = T))
+
+#Averaging Light values depaending on grouped similar hours
+Ligh <- traset %>%
+  summarise(Light_Ave = mean(Light,na.rm = T))
+
+#Averaging CO2 values depaending on grouped similar hours
+CO <- traset %>%
+  summarise(CO2_Ave = mean(CO2,na.rm = T))
+
+#Averaging HumidityRatio values depaending on grouped similar hours
+Humidra <- traset %>%
+  summarise(HumidityRat_Ave = mean(HumidityRatio,na.rm = T))
+
+```
+
+```{r echo = FALSE,warning=FALSE,fig.height = 2,fig.width = 16 }
+#ploting temperature-time graph
+ggplot(data = temp, aes(Time, Temp_Ave, group = 1)) +
+  geom_point(color = "red")+
+  geom_line(color = "blue") + labs(y = "Temperature") + 
+  theme(axis.text.x = element_text(angle = 90)) + theme_classic()
+```
+
+```{r echo = FALSE,warning=FALSE,fig.height = 2,fig.width = 16 }
+#ploting Humidity-time graph
+ggplot(data = Humid, aes(Time, Humidity_Ave, group = 1)) +
+  geom_point(color  = "green")+
+  geom_line(color = "blue") + labs(y = "Humidity")+
+  theme(axis.text.x = element_text(angle = 90)) + theme_classic()
+
+```
+
+```{r echo = FALSE,warning=FALSE,fig.height = 2,fig.width = 16 }
+#ploting Light-time graph
+ggplot(data = Ligh, aes(Time, Light_Ave, group = 1)) +
+  geom_point(color = "blue")+
+  geom_line(color = "red") + labs(y = "Light") +
+  theme(axis.text.x = element_text(angle = 90)) + theme_classic()
+
+```
+
+```{r echo = FALSE,warning=FALSE,fig.height = 2,fig.width = 16 }
+#ploting CO2-time graph
+ggplot(data = CO, aes(Time, CO2_Ave, group = 1)) +
+  geom_point(color = "pink")+
+  geom_line(color = "blue") + labs(y = "CO2") + 
+  theme(axis.text.x = element_text(angle = 90)) + theme_classic()
+
+```
+
+```{r echo = FALSE,warning=FALSE,fig.height = 2,fig.width = 16 }
+#ploting HumidityRatio-time graph
+ggplot(data = Humidra, aes(Time, HumidityRat_Ave, group = 1)) +
+  geom_point(color = "green")+
+  geom_line(color = "red") + labs(y = "HumidityRatio") + 
+  theme(axis.text.x = element_text(angle = 90)) + theme_classic()
+
+```
+
+The figures above show how the time of the day affects the variables. There is always an increase in all variables between 07:00 am to around 19:00 and this is evidently seen in figures above. And it's suspected that it's during this time the office is likely to be occupied. During morning times i.e. between 00:00 to 07:00 values picked up by all sensors are relatively low. 
+
+
+The figure below shows that there is a very high correlation between Humidity and HumidityRatio of 0.95. And there is also a positive high correlation between Temperature and Light, CO$_2$ and Temperature, Light and CO$_2$, Humidity and  CO$_2$. There seems no relationship between Humidity and Temperature, CO$_2$ and Temperature, and Light and Temperature.
+
+```{r echo = FALSE,warning=FALSE,fig.height = 4,fig.width = 4, fig.cap = "The figure shows the correlation Matrix of the training set variables." }
+#correlation between difference variances of the training set
+corr <-round(cor(train_set[-c(1,7)]),3)
+corrplot(corr, method = "number")
+
+```
+
+\pagebreak
+\newpage
+
+# Models
+
+The training dataset was split into two sets, 80% of which was used to train the models and 20% used as a validating (or evaluation) dataset. This Validation set was used to determine the models' classification rates. After training and evaluating of our models, they were tested on another test dataset of 2665 instances.
+
+We used the Classification rate metric to evaluate the performance of our models. The classification rate is the ratio of the number of correctly predicted observations divided by the total number of observations in the dataset multiplied by 100 to give a percentage [@brownlee_2016].
+
+The date variable was omitted while fitting all the models because other variables seemed to depend and it's effect on them was explained earlier.
+
+## Logistic Regression
+
+### About the Model
+Logistic regression is a kind of modeling that produces results in a binary form and it's used to predict outcomes of categorical data. And these outcomes are obtained by predicting the probability of a response belonging to a specific category. This model can be used to predict outcomes of variables with two (2) or more categorical levels [@candanedo_feldheim_2015].
+
+###  Training the model
+
+Below is a detailed description of the model fitted with a logistic regression trained using glmnet R function.
+
+```{r echo = FALSE, , warning=FALSE, include=FALSE }
+#Eliminating the date variable
+train_set <- train_set[-1]
+
+#Spliting our train set in a ratio of 8:2
+set.seed(123)
+Index <- sample(1:nrow(train_set), nrow(train_set)*0.8) 
+trainset <- train_set[Index,]
+validation <- train_set[-Index,]
+
+set.seed(123)
+#training s model
+log_model <- glm(Occupancy~.,trainset,family = "binomial")
+
+#summary of the fitted model
+summary(log_model)
+
+anova(log_model, test="Chisq")
+
+
+```
+
+|Predictors   |Coefficient Estimate|p-value  |
+|-------------|--------------------|---------|
+|(Intercept)  |-2.138e+01          |0.211483 |
+|Temperature  |6.516e-01           |0.417389 |
+|Humidity     |1.776e+00           |0.000972 |
+|Light        |1.966e-02           |2e-16    |
+|CO2          |1.293e-02           |2e-16    |
+|HumidityRatio|-1.364e+04          |0.000112 |
+
+Table: The models's Coefficient Estimates and their p-values
+
+Temperature's p-value of 0.417389 seems to be too large (greater than 5% level) which indicates that there is no clear exitance of the relationship between temperature and the occupation status of an office room making the variable statistically insignificant. And for other predictors i.e. Humidity, Light, CO$_2$, and HumidityRatio, there seems to a significant association between these variables and the room occupancy response variable. 
+
+
+```{r echo = FALSE, , warning=FALSE, fig.height=4,fig.width=4,fig.cap="The model's coefficients graphical representation"}
+#most important vriable plot
+plot_model(log_model,transform = 
+             NULL,show.intercept = T,show.values = T,value.offset = .4) + theme_sjplot()
+```
+
+For the null hypothesis\footnote{Null hypothesis means that there is no relationship between response and predictor variables}, the model's log odd is -21.38. And the interpretation of the above model's coefficients, i.e. for every unit Temperature increase keeping the values of other variables constant, the log odds of room occupancy increase by an estimated value of 0.65. The log odds of room occupancy increase by 1.78 for every one unit increase in Humidity. And there is an increase in log odds of room occupation of 0.02 and 0.01 whenever there is a unit increase in Light and CO$_2$ respectively.The negative on the HumidityRatio coefficient indicates that a one-unit increase in HumidityRatio decreases the log odds of room occupation by 13635.83. We can also say that the higher the HumidityRatio, the lower chances of the room being occupied.
+
+To analyze how well our model fits data, we make sense of the Null deviance, Residual deviance, and AIC figures as shown in the table below.
+
+
+|Parament         |Value  |
+|-----------------|-------|
+|Null deviance    |6015.42|
+|Residual deviance|650.36 |
+|AIC              |662.36 |
+
+Table: Model's deviance and AIC values
+
+From the table above, since the Residual deviance is less than the Null deviance by 5353.06, this tells us that the alternative hypothesis model is significantly better than the null model.
+
+
+###  Evaluating the logit model
+
+```{r echo = FALSE, , warning=FALSE, include=FALSE }
+#prediction on the train set
+log_model_pred <- predict(log_model,newdata = trainset, type = "response")
+
+#Misclassification error on trainset
+tab1 <- ifelse(log_model_pred>0.5,"YES","NO")
+tab2 <- table(Predicted = tab1, Actual = trainset$Occupancy)
+
+tab2
+
+#Train error
+
+train_error <- 1 - sum(diag(tab2)/sum(tab2))
+round(train_error*100,2)
+
+#classification rate
+train_rate <-  sum(diag(tab2)/sum(tab2))
+round(train_rate*100,2)
+```
+
+For the prediction of whether the office is occupied or not, we converted predicted probabilities into labeled classes of  **NO** and **YES** where NO means that the office is not occupied and YES for occupied rooms. And these predictions were classified using a threshold of 0.5.
+
+This means that whenever the output of the model $Occuppancy = \log(\frac{P}{1-P})$ $= -21.38 +  0.65Temperature + 1.78Humidity + 0.021Light + 0.01CO2 - 13635.83HumidityRatio$ is less than 0.5 then the room is not occupies whereas occupied from outputs greater than 0.5.
+
+
+Where;
+
+$P = \frac{exp(-21.38 +  0.65Temperature + 1.78Humidity + 0.021Light + 0.01CO2 - 13635.83HumidityRatio)}{[1+(-21.38 +  0.65Temperature + 1.78Humidity + 0.021Light + 0.01CO2 - 13635.83HumidityRatio)]}$
+
+
+\begin{table}[!hbt]
+\centering
+\caption{The confusion Matrix of the model evaluated against the train set.}
+\begin{tabular}{ |c|c|c| } 
+ \hline
+           & \multicolumn{2}{|c|}{Actual} \\
+ \hline
+ Predicted & NO  & YES    \\ 
+ \hline
+ NO        & 4017 & 34 \\ 
+ \hline
+ YES       & 59 & 1290 \\ 
+\hline
+\end{tabular}
+\end{table}
+
+On the train set, our model correctly predicted 5307 times the room was not occupied and 1290 times occupied giving us a total of 5307 correct predictions. But they were also 93 false predictions, 34 false negatives, and 59 false positives. Our model correctly predicted the room occupation status by 98.28% classification rate against the train set.
+
+```{r echo = FALSE, , warning=FALSE, include=FALSE }
+#prediction on the test set(Evaluation set)
+log_model_pred2 <- predict(log_model,newdata = validation, type = "response")
+
+#Misclassification error on trainset
+tab3 <- ifelse(log_model_pred2>0.5,"YES","NO")
+tab4 <- table(Predicted = tab3, Actual = validation$Occupancy)
+
+tab4
+
+#Train error
+test_error <- 1 - sum(diag(tab4)/sum(tab4))
+
+round(test_error*100,2)
+
+#classification rate
+test_rate <-  sum(diag(tab4)/sum(tab4))
+
+round(test_rate*100,2)
+```
+
+When the model is subjected to unseen data(validation set) the prediction confusion matrix is as below.
+
+
+\begin{table}[!hbt]
+\centering
+\caption{Confusion Matrix of the model with the validation set.}
+\begin{tabular}{ |c|c|c| } 
+ \hline
+           & \multicolumn{2}{|c|}{Actual} \\
+ \hline
+Predicted & NO  & YES    \\ 
+ \hline
+ NO        & 999 & 9 \\ 
+ \hline
+ YES       & 17 & 326 \\ 
+\hline
+\end{tabular}
+\end{table}
+
+When the model is tested against the validation set, it correctly predicted the room occupation status by 1325 times with 999 unoccupied and 326 times for the occupied room. The model has a classification rate when subjected to the unseen data of 98.08% which is a good performance. And also based on this high classification rate, we can say there is a lower variation in the data.
+
+### Lasso Logistic Regression model
+
+The lasso model shows that the most significant variables in estimating whether the office room is occupied or not are Humidity, Light, CO$_2$, and HumidityRatio.
+
+```{r echo = FALSE, , warning=FALSE,fig.height=3,fig.width=3, fig.cap= "The figure shows the cross validation (nfold = 10) error in response to the log(lambda).",results='asis', strip.white=TRUE}
+# lasso regularization using cross validation
+#predictors
+X <- cbind(trainset$Temperature,trainset$Humidity,trainset$Light,trainset$CO2,trainset$HumidityRatio)
+Y <- trainset$Occupancy
+
+set.seed(112)
+log_model_lasso <- cv.glmnet(X, Y, alpha = 1, family = "binomial", nfolds = 10, type.measure = 'mse', standardize = T)
+plot(log_model_lasso)
+
+```
+
+From the figure above, the left-hand dashed vertical line tells us that the log of the optimal lambda value is approximately -8 and it's the one that minimizes the root mean square errors in prediction. The exact lambda value is 2.26e-4 and it's this value which was used to get the best model.
+
+```{r echo = FALSE, , warning=FALSE, include=FALSE }
+#Exact lambda value
+log_model_lasso$lambda.min
+
+set.seed(112)
+#best model using the mininum lambda
+log_model_lasso2 <- glmnet(X, Y, alpha = 1, family = "binomial",
+                      lambda = log_model_lasso$lambda.min) 
+
+#separating response and predictor variables
+testset <- cbind(validation$Temperature,validation$Humidity,validation$Light,validation$CO2,validation$HumidityRatio)
+y_test <- validation$Occupancy
+
+log_model_lasso_lse <- log_model_lasso$lambda.1se
+
+#log_model_lasso coefficients
+coef(log_model_lasso2, x = log_model_lasso_lse)
+
+
+#Prediction with lasso model on a train set
+log_model_predict1 <- predict(log_model_lasso, newx = X,
+                             s = log_model_lasso_lse, type = 'response')
+
+model_lasso1 <- ifelse(log_model_predict1 >= 0.5, "YES", "NO")
+
+#Confusion matrix
+taba <- table(Predicted = model_lasso1,Actual  = Y)
+taba
+
+#classification rate
+lasso_rate1 <- sum(diag(taba)/sum(taba))
+
+round(lasso_rate1*100,2)
+
+#Prediction with lasso model
+log_model_predict <- predict(log_model_lasso, newx = testset,
+                             s = log_model_lasso_lse, type = 'response')
+
+model_lasso <- ifelse(log_model_predict >= 0.5, "YES", "NO")
+
+#Confusion matrix
+tab5 <- table(Predicted = model_lasso,Actual  = y_test)
+tab5
+
+#classification rate
+lasso_rate <- sum(diag(tab5)/sum(tab5))
+round(lasso_rate*100,2)
+```
+
+\newpage
+
+\begin{table}[!hbt]
+\centering
+\caption{Confusion Matrix of the lasso model on the Evaluation set.}
+\begin{tabular}{ |c|c|c| } 
+ \hline
+           & \multicolumn{2}{|c|}{Actual} \\
+ \hline
+Predicted & NO  & YES    \\ 
+ \hline
+ NO        & 997 & 2 \\ 
+ \hline
+ YES       & 19   & 333\\ 
+\hline
+\end{tabular}
+\end{table}
+
+The performance of the lasso regularized model and the logistic model is quite the same on both train and validation sets. The classification rates of the lasso model are 98.68% and 98.45% when evaluated against train and validation sets respectively. Though the lasso model slightly performs better than the logistic model.
+
+
+### Model Performance Evaluation using ROC curve.
+
+The **ROC** curve (Receiver Operating Characteristic) is commonly used to examine the tradeoff between the detection of true positives while avoiding false positives [@lantz_2013].
+
+```{r echo = FALSE, , warning=FALSE, include=FALSE}
+#ROC curve of the lasso model
+set.seed(112)
+pred_roc <- predict(log_model_lasso, testset,type = "response",s = log_model_lasso_lse)
+
+pred_roc1 <- prediction(pred_roc, y_test)
+
+#performance test
+eval <- performance(pred_roc1, measure = "tpr",x.measure = "fpr" )
+
+#tpr = True Positive Rate
+tpr_pred_roc1 <- attr(eval,"y.values")[[1]]
+
+#fpr = Faslse Positive Rate
+fpr_pred_roc1 <- attr(eval,"x.values")[[1]]
+
+#Area under the ROC curve
+roc_curve <- attr(performance(pred_roc1,"acc"),"y.values")[[1]]
+roc_curve_sign <- signif(roc_curve, digits = 3)
+
+#Area under a curve
+auc <- performance(pred_roc1,"auc")
+
+#Calculating the area under the curve
+auc <- unlist(slot(auc, "y.values"))
+auc <- round(auc,4)
+
+#Logitic Model
+pred_log <- prediction(log_model_pred2, y_test)
+
+pred_log_perfor <- performance(pred_log,  measure = "tpr",x.measure = "fpr")
+
+#Area under the ROC curve
+roc_curve1 <- attr(performance(pred_log,"acc"),"y.values")[[1]]
+roc_curve_sign1 <- signif(roc_curve1, digits = 3)
+
+#Area under a curve
+auc1 <- performance(pred_log,"auc")
+
+#Calculating the area under the curve
+auc1 <- unlist(slot(auc1, "y.values"))
+auc1 <- round(auc1,4)
+```
+
+From the figure below, we can see that both models (Lasso and logit) quietly fitted the data (test set) very well. But the logit model slightly performs better because of the higher Area Under Curve(AUC)\footnote{Probalility that the fitted model correctly ranks the observations} of 0.9965 compared to 0.9943 of lasso model. But the difference is very minimal making both models suitable for estimating room occupation status. Both models also have high discrimination ability and this because of the high sensitivity and specificity as shown in the figure below.
+
+```{r echo = FALSE, warning=FALSE,fig.height=3.5, fig.cap="The ROC curves of both lasso and logit fitted models"}
+par(mfrow = c(1,2))
+#plot the ROC curve of the lasso model
+plot(eval,colorize = T, main = "Lasso model ROC-curve",
+     lwd = 3,
+     ylab = "Sensitivity",
+     xlab = "1-specificity")
+abline(a = 0, b = 1, lwd= 2,lty = 2)
+
+#adding the area on the curve
+legend(0.6,0.3, auc, title = "AUC:",cex = 0.8)
+
+#plot the ROC curve of the logit model
+plot(pred_log_perfor, colorize = T ,main = "Logit model ROC-curve",
+     lwd = 3,
+     ylab = "Sensitivity",
+     xlab = "1-specificity")
+abline(a = 0, b = 1,lwd= 2,lty = 2)
+
+#adding the area on the curve
+legend(0.6,0.3, auc1, title = "AUC:",cex = 0.8)
+
+```
+
+
+\pagebreak
+And finally, we can conclude that the best logistic model for estimating whether the room is occupied or not is ***Occupancy = 32.464 - 1.897Temperature + 0.020Light + 0.011CO2 - 1820.491HumidityRatio*** with a classification rate of 98.45%.
+
+Where $Occupancy = \log(\frac{P}{1-P})$. And if the Occupancy is greater than 0.5 then the room is occupied and not occupied otherwise as shown in the function below.
+
+Mathematically, the ***P*** can be expressed as;
+
+
+$P = \frac{exp(31.76 - 1.85Temperature + 0.0195Light + 0.0110CO2 - 1880.19HumidityRatio)}{[1+(31.76 - 1.85Temperature + 0.0195Light + 0.0110CO2 - 1880.19HumidityRatio)]}$
+
+ \begin{equation}
+       Occupancy = 
+        \begin{cases}  
+            Occupied      & \log(\frac{P}{1-P})>0.5 \\
+            Not Occupied  & \text{otherwise}
+        \end{cases}
+    \end{equation}
+
+
+
+## Classification Tree
+
+###  Understanding Classification Trees
+
+These are kinds of decision trees\footnote{A decision tree is a binary branching structure used to classify an arbitrary input vector X} used to estimate categorical responses for example predicting whether a student will pass an assignment or not [@james_witten_hastie_tibshirani_2013].  A classification tree is modeled through a process known as binary recursive partitioning. And this kind of partitioning is an iterative process of splitting the data into several partitions. Spliting stops if the relative decrease in impurity is below a prespecified threshold [@lantz_2013].
+
+
+### Traing the model
+```{r echo = FALSE,warning=FALSE, include=FALSE }
+set.seed(123)
+#fitting a classification tree model
+model_tree <- tree(Occupancy~., trainset)
+
+#summary of the model
+summary(model_tree)
+
+```
+
+The model has a training Misclassification error rate of 0.83% and a Residual mean deviance of 0.060. These two properties are extremely small indicating that the model tree provides a good fit to the training data.
+
+\pagebreak
+
+```{r echo = FALSE, warning=FALSE,fig.cap="The figure shows a classification tree with feature property at each internal node and the room occupation status at each terminal node:1 = Occupied room and 0 = Office room not occupied.",results='asis', strip.white=TRUE}
+#ploting the classification tree
+plot(model_tree,type = "uniform")
+text(model_tree,pretty = 0,cex = 0.75)
+```
+
+The tree above has six terminal nodes with four of them predicting unoccupied office room and the other two predicting occupied room. The figure also indicates that the most significant variable in estimating the room occupation status appears to be Light since at the root node of the tree as seen in the figure above decision was made based on the light variable.
+
+The first split criterion of the model is $light < 363.875$, and whenever the light is less than 363.875lx then the room is likely not to be occupied and for the light above, there are four internal nodes. And the room is likely to be occupied if the following conditions are satisfied.
+
+
+
+* Light $>$ 363.875 $\rightarrow$ Temperature $<$ 22.2113 $\rightarrow$ CO$_2$ $>$ 494.292
+
+* Light $>$ 363.875 $\rightarrow$ Temperature $>$ 22.2113 $\rightarrow$ CO$_2$ $>$ 904.875 $\rightarrow$ Temperature $<$ 22.6417
+
+The office room will be predicted unoccupied if the following conditions are true;
+
+* Light $<$ 363.875
+
+* Light $>$ 363.875 $\rightarrow$ Temperature $<$ 22.2113 $\rightarrow$ CO$_2$ $<$ 494.292
+
+* Light $>$ 363.875 $\rightarrow$ Temperature $>$ 22.2113 $\rightarrow$ CO$_2$ $<$ 904.875 
+
+* Light $>$ 363.875 $\rightarrow$ Temperature $>$ 22.2113 $\rightarrow$ CO$_2$ $>$ 904.875 $\rightarrow$ Temperature $>$ 22.6417
+
+
+### Evaluating Classification tree model 
+```{r echo = FALSE,warning=FALSE, include=FALSE }
+#Prediction on train set
+model_tree_pred1 <- predict(model_tree,newdata = trainset,type = "class")
+
+#confusion matrix
+tree_conf1 <- table(Predicted = model_tree_pred1,Actual = trainset$Occupancy)
+
+
+#classification rate of the evaluation set
+test_error_rate1 <- sum(diag(tree_conf1)/sum(tree_conf1))
+round(test_error_rate1*100,2)
+
+#Prediction on evaluation set
+model_tree_pred <- predict(model_tree,newdata = validation,type = "class")
+
+
+#confusion matrix
+tree_conf <- table(Predicted = model_tree_pred,Actual = validation$Occupancy)
+
+#classification rate of the test set
+test_error_rate <- sum(diag(tree_conf)/sum(tree_conf))
+round(test_error_rate*100,2)
+
+```
+
+
+\begin{table}[!hbt]
+\centering
+\caption{Confusion matrix of the classification tree model on the Validation set.}
+\begin{tabular}{ |c|c|c| } 
+ \hline
+           & \multicolumn{2}{|c|}{Actual} \\
+ \hline
+Predicted & 0  & 1   \\ 
+ \hline
+ 0        & 1009 & 7 \\ 
+ \hline
+ 1       &  7  & 328\\ 
+\hline
+\end{tabular}
+\end{table}
+
+In the confusion matrix above, the model's performance is really good at estimating the office room occupation with 1337 correctly estimated times as shown by the main diagonal of the table above. Both false negatives and false positives are extremely small and because of this, we can say that the model fits the data quite well. 
+
+
+The overall model classification rate is 98.96% which is a good rate. But we went further to prune\footnote{Pruning is a strategy to constrain the size of the tree} the model via cross-validation to see if we could improve the model furthermore.
+
+```{r echo = FALSE,warning=FALSE,fig.height=3,fig.width=3,fig.cap="From the figure, it looks like 4 split tree has the lowest deviance.",results='asis', strip.white=TRUE}
+set.seed(123)
+#Cross validation
+cv_model_tree <- cv.tree(model_tree,FUN = prune.misclass)
+#plot
+plot(cv_model_tree$size,cv_model_tree$dev,type = "b",xlab = "Tree size",ylab = "Deviance",col = "red",main = "Cross-Validation plot")
+```
+
+It's evident from the figure 8, that the optimal level of the tree is 4 and it was used to prune our original tree model down to four terminal nodes. 
+
+\newpage
+
+```{r echo = FALSE,warning=FALSE,fig.cap=" A pruned tree: 1 = Occupied room and 0 = Office room not occupied.",results='asis', strip.white=TRUE}
+#Model pruning
+set.seed(123)
+model_tree_prune <- prune.tree(model_tree, best = 4)
+
+#tree diagram
+plot(model_tree_prune,type = "uniform")
+text(model_tree_prune, pretty=0, cex=0.85)
+```
+
+Cross-Validation results in a tree with four terminal nodes as shown by the figure above. And the estimation is 50-50 with two nodes indicating an unoccupied office and the other two predicting an occupied one.
+
+Like the unpruned tree,  the most significant variable is light and shown in the figure above. Again based on the figure above, the office room is not occupied whenever light is below *363.875lx*. And when Light is greater than *363.875lx* then we go to the right into the first internal node. At this node, when the temperature is below $22.2113^0$C then the room is likely to be occupied and for the temperature above, and a decision is made at the next internal node. At this node, the decision is based on the CO$_2$ gas, and the room is predicted to be occupied when the gas is above 904.875ppm and not occupied otherwise.
+
+```{r echo = FALSE,warning=FALSE, include=FALSE }
+#prediction using the train set
+model_tree_pred2 <- predict(model_tree_prune,newdata = trainset,type = "class")
+
+#confusion matrix
+tab10 <- table(Predicted = model_tree_pred2, Actual = trainset$Occupancy)
+tab10
+
+#Classification rate
+prune_class_rate1 <- sum(diag(tab10)/sum(tab10))
+round(prune_class_rate1*100,2)
+
+#prediction using the test set
+model_tree_pred1 <- predict(model_tree_prune,newdata = validation,type = "class")
+
+#confusion matrix
+tab6 <- table(Predicted = model_tree_pred1, Actual = validation$Occupancy)
+tab6
+
+#Classification rate
+prune_class_rate <- sum(diag(tab6)/sum(tab6))
+round(prune_class_rate*100,2)
+```
+
+
+\begin{table}[!hbt]
+\centering
+\caption{Confusion matrix of the pruned model.}
+\begin{tabular}{ |c|c|c| } 
+ \hline
+           & \multicolumn{2}{|c|}{Actual} \\
+ \hline
+Predicted & 0  & 1   \\ 
+ \hline
+ 0        & 1005 & 5 \\ 
+ \hline
+ 1       & 11   & 330\\  
+\hline
+\end{tabular}
+\end{table}
+
+
+Pruning seems not to improve the model's performance because the classification rate of the pruned model is less than that of the unpruned model by 0.14% (Classification rate of the pruned model is 98.82%). And also the number of false positives increases from 7 to 11 in the pruned model. Therefore the unpruned model is better in predicting whether the office room is occupied or not.
+
+## Bagging/Random forest
+
+### Understanding Bagging and Random forest.
+
+Bagging also called bootstrap aggregation is an ensemble\footnote{Ensemble means combining multiple models to obtain better predictions} learning technique that is designed to improve the stability and accuracy of models by combining several trees in a single procedure. In this kind of modeling, multiple models of the same learning algorithm are repeatedly fitted to bootstrapped subsets of dataset randomly picked from the train set [@james_witten_hastie_tibshirani_2013].
+
+Random forest models build multiple decision trees and merge them together. In random forests, a bootstrapped dataset that is the same size as the original set is created selected randomly from the original set, and a decision tree is created using this bootstrapped dataset, but by only using a random subset of variables and every step. The process is repeated by making new bootstrapped sets and building decision trees of random subset variables at each stage and this results in several decision trees [@lantz_2013]. Random forests consciously addresses overfitting using OBB observations to construct the fitted values and measure of fit, and by averaging over tree [@berk_2016].
+
+The Number of predictors considered at each split in the Random Forest model is approximately equal to the square root of the total number of predictors ($m \approx \sqrt{p}$). The main difference between bagging and random forests is the choice of predictors chosen at each split [@james_witten_hastie_tibshirani_2013]
+
+### Training the bagged model
+
+```{r echo = FALSE, warning=FALSE, include=FALSE }
+set.seed(123)
+#fitting a bagged model
+bagged_model <- randomForest(Occupancy~., data = trainset, 
+                             mtry = 5, #all 5 predictors considered in each split of the tree
+                             importance = TRUE,
+                             ntree = 250,
+                             do.trace = 25)
+bagged_model
+```
+
+The bagged model was trained on 250 trees because it was giving the highest classification rate, and it was also done using 25 bootstrapped samples. And also by far *light* seems to be the most important variable in the model followed by CO$_2$ and other variables as shown in figure 10 below. And *Light* is also variable with the largest mean decrease in the **Gini Index**.
+
+\pagebreak
+
+```{r echo = FALSE, warning=FALSE,fig.height=4,fig.width=6,fig.cap="Variable Importance plots", results='asis', strip.white=TRUE}
+#Plot of the most important variable
+varImpPlot(bagged_model, main = "Variable Importance plot",scale=F,
+col="blue",cex=1,pch=19)
+```
+
+The number of variables tried at each split of the bagged model is 5 and also the model's Out-Of-Bag estimate of error rate is 0.81% meaning it's 0.18% of the total training data forms the OOB sample. The confusion matrix below continues to show how well the model fits the data with extremely lower classification errors, 0.564% and 1.586% for not and occupied room respectively.
+
+|   |  0   |   1   |  class.error |
+|---|------|-------|--------------|
+|0  |4053  |23     |0.564%        |
+|1  |21    |1303   |1.586%        |
+
+Table: Confusion Matrix of the bagged model
+
+\pagebreak
+
+```{r echo = FALSE, warning=FALSE,fig.height=4,fig.width=4, fig.cap="The figure shows that the OOB error reduces as the number of trees increase.",results='asis', strip.white=TRUE}
+
+plot(bagged_model$err.rate[, 'OOB'], type = 's', xlab = 'Number of trees', ylab = 'OOB error',col = "red",main=" OBB error in relation with the number \n of trees")
+
+```
+
+
+### Evaluating model's performance
+```{r echo = FALSE, warning=FALSE, include=FALSE }
+
+#prediction on the tarin set
+bagged_model_pred_train <- predict(bagged_model,newdata = trainset)
+
+#confusion matrix
+tab9 <- table(Predicted = bagged_model_pred_train, Actual = trainset$Occupancy)
+bagged_err_train <- sum(diag(tab9)/sum(tab9))
+round(bagged_err_train*100,2)
+
+#prediction on the test set
+bagged_model_pred <- predict(bagged_model,newdata = validation)
+
+#confusion matrix
+tab7 <- table(Predicted = bagged_model_pred, Actual = validation$Occupancy)
+bagged_err <- sum(diag(tab7)/sum(tab7))
+round(bagged_err*100,2)
+```
+
+When we test our bagged model on the train set, it perfectly predicts the office room occupation status with a classification rate of 100%. And this may seem like overfitting but it is not the case because even when we tested the model on unseen data, it's performance was quite amazing with 99.41% classification rate. The confusion matrices below confirm this insertion.
+
+\begin{table}[!hbt]
+\begin{minipage}[c]{0.4\linewidth}
+\centering
+\caption{Confusion matrix of the model against the train set.}
+\begin{tabular}{ |c|c|c| } 
+ \hline
+           & \multicolumn{2}{|c|}{Actual} \\
+ \hline
+Predicted & 0  & 1   \\ 
+ \hline
+ 0        & 4076 & 0 \\ 
+ \hline
+ 1       & 0   & 1324\\ 
+\hline
+\end{tabular}
+\end{minipage}\hfill
+%
+\begin{minipage}[c]{0.4\linewidth}
+\centering
+\caption{Confusion matrix of the model against the validation set.}
+\begin{tabular}{ |c|c|c| } 
+ \hline
+           & \multicolumn{2}{|c|}{Actual} \\
+ \hline
+Predicted & 0  & 1   \\ 
+ \hline
+ 0        & 1013 & 5 \\ 
+ \hline
+ 1       & 3   & 330\\ 
+\hline
+\end{tabular}
+\end{minipage}
+\end{table}
+
+
+### Training the Random Forest model
+```{r echo = FALSE, warning=FALSE, include=FALSE }
+set.seed(123)
+#fitting a random forest model 
+forest_model <- randomForest(Occupancy~., data = trainset, 
+                             mtry = 3, #considering 3 variables at each tree split
+                             importance = TRUE,
+                             ntree = 250,
+                             do.trace = 25
+                             )
+forest_model
+
+#variable importance
+importance(forest_model)
+
+#important variable
+varImpPlot(forest_model)
+
+```
+
+The Random Forest model like the bagged model was trained on 250 trees and 25 bootstrapped samples. And at every split, three predictors are randomly chosen from the five predictor variables. The most important variables in the random forest model are Light and CO$_2$ but also other variables seem to be significant and therefore we opted not to drop any variable. This is shown in the figure below.
+
+```{r echo = FALSE, warning=FALSE,fig.height=4,fig.width=4 }
+#important variable plot
+varImpPlot(forest_model,type=1,scale=T,
+main="Variable Importance Plot for \n Room Occupancy", col="blue",cex=1,pch=19)
+
+```
+
+
+### Random Forest Model Evaluation
+```{r echo = FALSE, warning=FALSE, include=FALSE }
+#prediction on the tarin set
+forest_model_pred_train <- predict(forest_model,newdata = trainset)
+
+#confusion matrix
+tab11 <- table(Predicted = forest_model_pred_train, Actual = trainset$Occupancy)
+forest_err_train <- sum(diag(tab11)/sum(tab11))
+round(forest_err_train*100,2)
+
+#prediction on the test set
+forest_model_pred <- predict(forest_model,newdata = validation)
+
+#confusion matrix
+tab12 <- table(Predicted = forest_model_pred, Actual = validation$Occupancy)
+forest_err <- sum(diag(tab12)/sum(tab12))
+round(forest_err*100,2)
+```
+
+The performance of the random forest model when evaluated against both train and validated datasets is exactly the same as that of the bagged model. The classification rate of the model is 100% and 99.41% on train and test data sets respectively. Reducing the number of variables at each split doesn't seem to improve the model's data fitness any further. 
+
+## Gradient boosted trees
+
+### Understanding Boosted Trees
+Gradient boost is an ensemble learning method that builds fixed-sized trees based on previous tree's errors. It trains several models in an additive, gradual, and sequential approach. Gradient Boost scales all the trees by the same amount. It builds a tree based on the errors made by the previous tree and then it scales it. And it repeats this process by building several trees till the requested number is reached [@brownlee_2016].
+
+Booting tends to perform well compared to bagging and random forests because of the shrinkage parameter $\lambda$ in boosting slows the process down even further, allowing more and different shaped trees to attack the residuals [@berk_2016].
+
+### Training a gradient boosted model
+
+The Gradient Boosted Model was trained on 5000 maximum number of trees, interaction depth of 4 (during training, we tested for 1,2,3), shrinkage was set to 0.005, cross-validation folds set to 10, and 1 as our bagging fraction.
+
+```{r echo = FALSE,warning=FALSE, include=FALSE }
+#training a bossted model
+gbm_train_bin <- trainset
+gbm_train_bin$Occupancy <- as.numeric(gbm_train_bin$Occupancy)-1 
+set.seed(123)
+boosted_model <- gbm(Occupancy~., data = gbm_train_bin, 
+                    distribution = "gaussian",
+                    n.trees = 5000,
+                    interaction.depth = 4,
+                    bag.fraction = 1,
+                    shrinkage = 0.005,
+                    cv.folds = 10,
+                    verbose = F,
+                    n.cores = NULL)
+
+#model summary data
+summary(boosted_model)
+
+#CV Errors per tree
+best_B <- gbm.perf(boosted_model, method = 'cv')
+
+#get MSE and compute RMSE
+min(boosted_model$cv.error)
+plot(boosted_model)
+```
+
+
+|Variable      |rel.inf|
+|--------------|-------|
+|Light         |94.852 |
+|CO2           |2.418  |
+|Temperature   |2.10   |
+|Humidity      |0.261  |
+|HumidityRatio |0.107  |
+
+Table: Model's variable relative influence
+
+From the table above we observe that by far *Light* is the most important variable in determining where the office rooms occupied or not. And this is followed by CO$_2$ and others as shown by the table above.
+
+### Evaluating the model
+```{r echo = FALSE,warning=FALSE, include=FALSE }
+#Testing the model on the train set
+boosted_model_pred <- predict(boosted_model,newdata = gbm_train_bin)
+
+
+#classification rate on the train set
+err <- mean((gbm_train_bin$Occupancy - boosted_model_pred)^2)
+err1 <- 1- err
+round((err1*100),2)
+
+#Testing the model on the test set
+test_bin <- validation
+test_bin$Occupancy <- as.numeric(test_bin$Occupancy)-1 
+
+boosted_model_pred1 <- predict(boosted_model,newdata = test_bin)
+
+#classification rate on the test set
+err2 <- mean((test_bin$Occupancy - boosted_model_pred1)^2)
+err3 <- 1- err2
+round((err3*100),2)
+```
+
+The boosted model seems to fit data very well especially when tested on the train set with a classification rate of 99.71%. But when the model is evaluated against unseen data the accurately estimated times drop to 99.26% but which is still a good performance.
+
+\pagebreak
+## Models' Comparison
+
+
+|Model       |Significant Variables          |Accuarancy <br>train set(%)|Accurancy validation set|
+|------------|------------------------------ |-----------------------|------------------|
+|Logistic    |Temp,Light, Humidity,          |98.28                   |98.08            |
+|            |CO2,HumidtyRatio.               |                       |                  |
+|Lasso logit |Temp,Light, CO2,               | 98.68                 |98.45            |
+|            |HumidtyRatio.                   |                       |                  |
+|Classification|Temp,Light, CO2.             |99.07                 |98.82             |
+|Bagged      |Temp,Light, Humidity,          |100                    |99.41            |
+|             |CO2,HumidtyRatio.              |                       |                  |
+|Random Forest|Temp,Light, Humidity,         |100                    |99.41            |
+|             |CO2,HumidtyRatio.              |                       |                  |
+|Gradient Boosted|Temp,Light, Humidity,      |99.71                  |99.26             |
+|               |CO2,HumidtyRatio.            |                       |                  |
+
+Table: The table below show models performance.
+
+From the table above, we can see across the board that all models have good accuracies on both train and validation sets. The performance of the classification tree model on the unseen data is very good with a classification rate of 98.82%. Higher accuracies were obtained when using Temperature, Light and CO$_2$ predictors.The model also performs excellently well on the train set with an accuracy rate of 99.07%
+
+Bagged and Random Forest models performed extremely very well on both train and evaluation sets with a 100% misclassification rate when evaluated against the train set. But also when they were subjected to unseen data, their performances remain the best compared to other models. And the lowest misclassification errors for both models were obtained when all predictors are considered.
+
+The performance of the logistic model and it's lasso regularized model is more same as that of the classification tree model on both seen and unseen data as shown in the table above.  
+
+The Gradient Boosted model performs better than the logistic and classification tree mode, and slightly below the bagged and Random forest model.
+
+In conclusion, we can say that in predicting whether the office is occupied or not, Bagging and Random Forest models are the most accurate models with the smallest misclassification rate of 0% and 0.59% on the train and test sets respectively. This suggests that these two models can be relied on to make future predictions.  And it's also observed that Light plays the most vital role in predicting whether the room is occupied or not than any other variable.
+
+\pagebreak
+
+# Models'Testing and Conclusions.
+
+```{r echo = FALSE,warning=FALSE, include=FALSE }
+#Test set
+Model_validation <- read.csv("G:/UCT-MSc. Data Science/Semester 1/Supervised Learning/Assignment/Assignment 2/occupancy_testing.csv",header = TRUE,stringsAsFactors = TRUE)
+
+dim(Model_validation)
+
+model_validation <- Model_validation[-1]
+
+#Testing the logistic model
+log_model_test <- predict(log_model,newdata = model_validation,type =  "response")
+
+#Assigning probabilities
+tab1_test <- ifelse(log_model_test >0.5,1,0)
+
+#Combining a predicted and actual values
+tab2_test <- cbind(Predicted = tab1_test, Actual = model_validation$Occupancy)
+#creating a dataframe
+
+tab2_test1 <- as.data.frame(tab2_test)
+
+#saving the data fram
+write.csv(tab2_test1,'Logitic_Test_Result.csv',row.names = FALSE)
+
+#Confusion matrix
+test_log_conf <- table(Predicted = tab1_test, Actual = model_validation$Occupancy)
+#classification rate
+test_log_rate <- sum(diag(test_log_conf)/sum(test_log_conf))
+round((test_log_rate)*100,2)
+
+224/sum(225,747)
+
+
+#Testing the classification tree model
+model_tree_test <- predict(model_tree,newdata = model_validation,  type = "class")
+
+
+#Combining a predicted and actual values
+tab2_test2 <- cbind(Predicted =model_tree_test, Actual = model_validation$Occupancy)
+
+#creating a dataframe
+tab2_test3 <- as.data.frame(tab2_test2)
+
+#saving the data fram
+write.csv(tab2_test3,'Classification_Tree_Test_Result.csv',row.names = FALSE)
+
+#Confusion matrix
+model_tree_test_conf <- table(Predicted = model_tree_test, Actual = model_validation$Occupancy)
+#classification rate
+model_tree_test_rate <- sum(diag(model_tree_test_conf)/sum(model_tree_test_conf))
+round((model_tree_test_rate)*100,2)
+
+552/sum(552,420)
+
+
+#Testing the bagged model
+bagged_model_test <- predict(bagged_model,newdata = model_validation)
+
+
+#Combining a predicted and actual values
+tab3_test3 <- cbind(Predicted =bagged_model_test, Actual = model_validation$Occupancy)
+
+#creating a dataframe
+tab4_test4 <- as.data.frame(tab3_test3)
+
+#saving the data fram
+write.csv(tab4_test4,'Bagged_Test_Result.csv',row.names = FALSE)
+
+#Confusion matrix
+bagged_model_test_conf <- table(Predicted = bagged_model_test, Actual = model_validation$Occupancy)
+#classification rate
+bagged_model_test_rate <- sum(diag(bagged_model_test_conf)/sum(bagged_model_test_conf))
+round((bagged_model_test_rate)*100,2)
+
+161/sum(161,811)
+
+
+#Testing the random forest model
+forest_model_test <- predict(forest_model,newdata = model_validation)
+
+
+#Combining a predicted and actual values
+tab5_test5 <- cbind(Predicted =forest_model_test, Actual = model_validation$Occupancy)
+
+#creating a dataframe
+tab6_test6 <- as.data.frame(tab5_test5)
+
+#saving the data fram
+write.csv(tab6_test6,'Forest_Test_Result.csv',row.names = FALSE)
+
+#Confusion matrix
+forest_model_test_conf <- table(Predicted = forest_model_test, Actual = model_validation$Occupancy)
+#classification rate
+forest_model_test_rate <- sum(diag(forest_model_test_conf)/sum(forest_model_test_conf))
+round((forest_model_test_rate)*100,2)
+
+
+#Testing the Gradient Boosted model
+boosted_model_test <- predict(boosted_model,newdata = model_validation,
+                              type = "response",n.trees = 5000)
+
+
+#Combining a predicted and actual values
+tab7_test7 <- cbind(Predicted =boosted_model_test, Actual = model_validation$Occupancy)
+
+#creating a dataframe
+tab8_test8 <- as.data.frame(tab7_test7)
+
+#saving the data fram
+write.csv(tab8_test8,'Boosted_Test_Result.csv',row.names = FALSE)
+
+#classification rate
+rate <- mean((model_validation$Occupancy - boosted_model_test)^2)
+rate1 <- 1- rate
+round((rate1*100),2)
+
+```
+
+When the logistic model is tested against the test set, the classification rate drops from 98.08% to 90.39%. But still, the performance of the model is not that bad. Though the worrying thing maybe it's poor performance incorrectly predicting the occupied room. There were 972 times when the office room was occupied, but the model only accurately predicted 747 times, and 225(or 23.04%) were misclassified. 
+
+The performance of the classification tree model is fair whereby only 78.31% of the observations are correctly classified. This performance is way below than that which was recorded while training and evaluating the model. Like the logistic model, the classification tree model performs poorly in accurately estimating true positives or occupied office. Where 792 times (or 56.79%) were misclassified.
+
+The bagged model when tested against the test set, it's performance is good with a 92.95% classification rate. And not like the logistic and classification tree model, the error rate of the model to accurately predicted an occupied is quite low, which is 16.56%.
+
+The Random Forest model performs very well than any other model. It perfectly classifies 93.21% of the overall observations. This performance can be relied on to do future predictions.
+
+The Gradient Boosted Model has a classification rate of 92.25% when evaluated against the test set. So it's prediction of the office occupation status can be relied on.
+
+
+|Model               |Classification Rate (%) |
+|--------------------|------------------------|
+|Logistic            |90.39                   |
+|Classification Tree |78.31                   |
+|Bagging             |92.9                    |
+|Random Forest       |93.21                   |
+|Gradient Boost      |92.25                   |
+
+Table: Classification rates of models evaluated against the Test set
+
+Overall, the best model in predicting whether the office is occupied or not is the Random Forest Model with a classification rate of 93.21%.
+
+\newpage
+# Appendix 
+
+```{r  ref.label=knitr::all_labels(), echo=TRUE,eval=FALSE}
+
+
+```
+
+\newpage
+
+# References
