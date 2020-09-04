@@ -1,6 +1,8 @@
 ---
-title: "STA5076X - Supervised Learning Assignment 2"
-author: \textcolor{blue}{ALEX MIRUGWE - MRGALE005}
+title: "Accurate occupancy detection of an office room from light,
+temperature, humidity and CO2 measurements using statistical
+learning models"
+author: \textcolor{blue}{ALEX MIRUGWE}
 date: '`r format(Sys.Date(), "%d-%B-%Y")`'
 output: 
   pdf_document: 
@@ -13,7 +15,6 @@ header-includes:
   - \usepackage{titling}
   - \pretitle{\begin{center}
   - \posttitle{\end{center}}
-    \includegraphics[width=2in,height=2in]{G:/UCT-MSc. Data Science/Semester 1/Supervised Learning/Assignment/Assignment 2/logo.jpg}\LARGE\\}
 ---
 
 
